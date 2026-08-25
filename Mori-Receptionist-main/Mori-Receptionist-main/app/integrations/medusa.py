@@ -45,6 +45,14 @@ DEFAULT_FIELDS = (
     "*images"
 )
 
+# Store endpoints omit these inventory-management fields unless explicitly
+# requested with `+`. Keeping the selection separate from DEFAULT_FIELDS
+# prevents catalogue sync from accidentally embedding volatile inventory.
+LIVE_PRODUCT_FIELDS = (
+    DEFAULT_FIELDS
+    + ",+variants.inventory_quantity,+variants.manage_inventory,+variants.allow_backorder"
+)
+
 
 class MedusaClient:
     """Store-API-scoped client for one tenant's Medusa backend."""
@@ -86,9 +94,7 @@ class MedusaClient:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await client.get(url, headers=self._headers())
         if r.status_code >= 400:
-            logger.error(
-                "Medusa list_regions failed: HTTP %d %s", r.status_code, r.text[:300]
-            )
+            logger.error("Medusa list_regions failed: HTTP %d %s", r.status_code, r.text[:300])
             r.raise_for_status()
         body = r.json()
         # v2 returns {"regions": [...]}; be defensive about a bare list too.
@@ -120,12 +126,45 @@ class MedusaClient:
             r = await client.get(url, headers=self._headers(), params=params)
 
         if r.status_code >= 400:
-            logger.error(
-                "Medusa list_products failed: HTTP %d %s", r.status_code, r.text[:300]
-            )
+            logger.error("Medusa list_products failed: HTTP %d %s", r.status_code, r.text[:300])
             r.raise_for_status()
 
         body = r.json()
         products = list(body.get("products") or [])
         count = int(body.get("count") or len(products))
         return products, count
+
+    async def get_product(
+        self,
+        product_id: str,
+        *,
+        region_id: str | None = None,
+        fields: str = LIVE_PRODUCT_FIELDS,
+    ) -> dict[str, Any] | None:
+        """Fetch one published product from the Store API.
+
+        This is deliberately separate from catalogue sync: a customer-facing
+        question about a specific product needs the value Medusa has *now*,
+        not the value that was embedded several hours ago.  A missing product
+        is returned as ``None`` so agent tools can give the model a useful
+        result instead of turning a discontinued product into a failed turn.
+        """
+        params: dict[str, Any] = {"fields": fields}
+        if region_id:
+            params["region_id"] = region_id
+        url = f"{self.base_url}/store/products/{product_id}"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(url, headers=self._headers(), params=params)
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            logger.error(
+                "Medusa get_product failed: HTTP %d %s",
+                response.status_code,
+                response.text[:300],
+            )
+            response.raise_for_status()
+        body = response.json()
+        # Medusa v2 returns {"product": {...}}. Supporting a bare object
+        # makes this client tolerant of compatible storefront proxies.
+        return body.get("product") if isinstance(body, dict) and "product" in body else body

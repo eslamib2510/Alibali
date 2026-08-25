@@ -11,15 +11,12 @@ Design notes
   delete-then-insert on `source_ref` behave the same as an admin-uploaded FAQ.
   A product's `source_ref` is its Medusa id, which is stable across syncs and
   gives us idempotency for free.
-- Prices ARE embedded. A customer asking "what does it cost" won't trigger a
-  live-price tool call — they'll trigger a knowledge search. If the current
-  price isn't in the text, the model has nothing to ground on and either
-  guesses or refuses. Price staleness (a day or two, between re-syncs) is
-  acceptable; total absence is not.
+- Prices are embedded as a discovery fallback, but the agent uses the live
+  price tool once it has identified a product ID. This lets RAG identify the
+  product while Medusa remains the source of truth for changing prices.
 - Stock quantities are DELIBERATELY NOT embedded. They change every hour and
   a stale "in stock" statement in the RAG store would mislead a customer into
-  buying something we can't ship. Live inventory is a future v4 tool call
-  (`get_product_stock`), not a RAG concern.
+  buying something we can't ship. `get_product_stock` reads them live instead.
 - Reconciliation: a nightly sync must delete rows for products that were
   removed upstream, or the knowledge base drifts and starts referencing
   products the storefront no longer sells. We track ids seen this run and
@@ -111,6 +108,11 @@ def format_product(product: dict[str, Any]) -> tuple[str, str]:
     description = (product.get("description") or "").strip()
 
     lines: list[str] = [title]
+    if product.get("id"):
+        # The live stock/price tools require this exact Store API identifier.
+        # Keeping it in product knowledge lets the agent resolve a customer's
+        # product name without accepting an arbitrary ID from the customer.
+        lines.append(f"Medusa Product ID: {product['id']}")
     if subtitle:
         lines.append(subtitle)
     if handle:
@@ -284,7 +286,10 @@ async def sync_tenant_products(tenant) -> SyncResult:
 
         logger.info(
             "synced %d products (page %d, offset %d, total ~%d)",
-            len(products), page, offset, total,
+            len(products),
+            page,
+            offset,
+            total,
         )
 
         offset += len(products)

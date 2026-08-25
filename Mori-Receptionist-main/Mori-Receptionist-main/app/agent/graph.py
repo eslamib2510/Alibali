@@ -29,6 +29,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.agent.state import AgentState
 from app.config import settings
+from app.tools.live_catalog import build_live_catalog_tools
 from app.tools.search_knowledge import build_search_knowledge
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,9 @@ else, no quotes, no preamble:
 ESCALATE: <short reason in one short sentence>
 
 Otherwise, reply normally as the receptionist. Use the search_knowledge tool
-before answering anything you don't already know about the business.
+before answering anything you don't already know about the business. For a
+question about current price or stock, first use search_knowledge to find the
+exact Medusa Product ID, then call get_product_price or get_product_stock.
 """
 
 
@@ -76,7 +79,9 @@ def build_graph(*, tenant_id: str, tenant_prompt: str):
     the tool binds to this tenant only, so caching across tenants would leak.
     """
     search_tool = build_search_knowledge(tenant_id)
-    tools = [search_tool]
+    # Chat-only tenants receive only RAG. Store tools are added only after
+    # their encrypted Medusa credentials are successfully loaded.
+    tools = [search_tool, *build_live_catalog_tools(tenant_id)]
 
     llm = ChatGoogleGenerativeAI(
         model=settings.RECEPTIONIST_DEFAULT_MODEL,
@@ -86,9 +91,7 @@ def build_graph(*, tenant_id: str, tenant_prompt: str):
         max_output_tokens=600,
     ).bind_tools(tools)
 
-    system_message = SystemMessage(
-        content=tenant_prompt.rstrip() + ESCALATION_INSTRUCTIONS
-    )
+    system_message = SystemMessage(content=tenant_prompt.rstrip() + ESCALATION_INSTRUCTIONS)
 
     async def agent_step(state: AgentState) -> dict:
         """Call the LLM with the current transcript + tools; return its reply.

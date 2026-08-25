@@ -9,7 +9,7 @@ from a node appends x to the existing list instead of replacing the whole
 history — the standard LangGraph reducer pattern for chat state.
 
 `tenant_id` is set once at graph entry and never overwritten. Tools that query
-per-tenant data (search_knowledge, later get_product_stock) close over it from
+per-tenant data (search_knowledge, get_product_stock) close over it from
 here rather than accepting it as an LLM-supplied argument — if the model got
 to name the tenant, that IS a cross-tenant leak by design.
 """

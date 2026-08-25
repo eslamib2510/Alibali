@@ -1,0 +1,27 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    # start-api.sh runs `alembic upgrade head` then execs uvicorn.
+    # Dockerfile's CMD already points at it; explicit here for clarity.
+    command: ./docker/start-api.sh
+    volumes:
+      - ./app:/app/app
+
+  worker:
+    build: .
+    env_file: .env
+    depends_on:
+      - redis
+    command: arq app.workers.receptionist.WorkerSettings
+    volumes:
+      - ./app:/app/app
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
